@@ -11,6 +11,7 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.steam.config.TelegramBotConfig;
 import ru.steam.entity.ItemType;
+import ru.steam.entity.db.ItemSnapshot;
 import ru.steam.entity.dto.InventoryDto;
 import ru.steam.entity.dto.ItemDto;
 
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
 @Service
 public class TelegramService extends TelegramLongPollingBot {
 
+    private final TrackingService trackingService;
     private final SteamService steamService;
     private final InventoryService inventoryService;
     private final Set<String> chatIds = new HashSet<>();
@@ -30,10 +32,11 @@ public class TelegramService extends TelegramLongPollingBot {
 
     public TelegramService(SteamService steamService,
                            TelegramBotConfig telegramBotConfig,
-                           DefaultBotOptions botOptions, InventoryService inventoryService) {
-        super(botOptions); // ← прокси передаётся в библиотеку
+                           DefaultBotOptions botOptions, TrackingService trackingService, InventoryService inventoryService) {
+        super(botOptions);
         this.steamService = steamService;
         this.telegramBotConfig = telegramBotConfig;
+        this.trackingService = trackingService;
         this.inventoryService = inventoryService;
     }
 
@@ -83,15 +86,24 @@ public class TelegramService extends TelegramLongPollingBot {
 
             case "/inventory":
                 if (args.isEmpty()) {
-                    checkInventory(chatId, "");
+                    checkInventory(chatId, userId, "");
                 } else {
-                    checkInventory(chatId, args);
+                    checkInventory(chatId, userId, args);
                 }
                 break;
 
             case "/portfolio":
-                handlePortfolio(chatId);
-            break;
+                handlePortfolio(chatId, userId);
+                break;
+
+            case "/track":
+                if (args.isEmpty()) {
+                    sendMessage(chatId, "*Set Steam ID:* /track 76561198158734100");
+                } else {
+                    trackSteamId(userId, args.trim());
+                    sendMessage(chatId, "*Added ID*: " + args.trim());
+                }
+                break;
 
             default:
                 sendMessage(chatId, "Неизвестная команда: " + command + "\n\n" +
@@ -106,28 +118,44 @@ public class TelegramService extends TelegramLongPollingBot {
     private void sendStartMessage(Long chatId) {
         sendMessageWithPhoto(chatId,
                 "\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11\uD83E\uDD11 \n \n" +
-                "WELCOME TO *DELETZ BOT* \n \n" +
-                "\uD83E\uDDF1 Use /price <ItemName> to check item price on Steam Market \n" +
-                "\uD83E\uDDEE Use /portfolio <SteamID> to track your steam inventory \n" +
-                "\uD83D\uDCE6 Use /inventory <SteamID> to check total inventory value \n \n"+
-                "\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8",
+                        "WELCOME TO *DELETZ BOT* \n \n" +
+                        "\uD83E\uDDF1 Use /price <ItemName> to check item price on Steam Market \n" +
+                        "\uD83E\uDDEE Use /portfolio <SteamID> to track your steam inventory \n" +
+                        "\uD83D\uDCE6 Use /inventory <SteamID> to check total inventory value \n \n" +
+                        "\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8\uD83D\uDCB8",
                 "img_start.png");
     }
 
-    private void checkInventory(Long chatId, String messageText) throws InterruptedException {
+    private void trackSteamId(Long userId, String steamId) {
+        trackingService.addTrackedId(userId, steamId);
+    }
+
+    private void checkInventory(Long chatId, Long userId, String messageText) throws InterruptedException {
         String steamId = messageText.replace("/inventory", "").trim();
         if (steamId.isEmpty()) {
-            sendMessage(chatId, "⚠️Please provide valid SteamID! Example: `76561198207609671`");
+            Set<String> ids = trackingService.getTrackedIds(userId);
+
+            if (ids.isEmpty()) {
+                sendMessage(chatId, "No tracked IDs. Use /track <steamId> to add one.");
+                return;
+            }
+
+            for (String id : ids) {
+                InventoryDto inventory = steamService.getInventory(id);
+                List<String> messages = formatInventoryMessages(inventory);
+                for (String s : messages) {
+                    sendMessage(chatId, s);
+                }
+            }
             return;
         }
 
         log.info("Sending request to steamService with {}", steamId);
         InventoryDto inventory = steamService.getInventory(steamId);
         List<String> messages = formatInventoryMessages(inventory);
-        for(String s : messages) {
+        for (String s : messages) {
             sendMessage(chatId, s);
         }
-
     }
 
     public List<String> formatInventoryMessages(InventoryDto dto) {
@@ -151,7 +179,8 @@ public class TelegramService extends TelegramLongPollingBot {
                                 return t;
                             }
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                     return ItemType.UNKNOWN;
                 }));
 
@@ -220,322 +249,110 @@ public class TelegramService extends TelegramLongPollingBot {
 
     private String getIcon(ItemType type) {
         return switch (type) {
-            case CASE    -> "📦";
+            case CASE -> "📦";
             case CAPSULE -> "💊";
             case STICKER -> "🎨";
-            case CHARM   -> "🪬";
-            case SKIN    -> "🔫";
-            case KNIFE   -> "🗡️";
-            case GLOVES  -> "🧤";
-            case PATCH   -> "🔰";
-            default      -> "▪️";
+            case CHARM -> "🪬";
+            case SKIN -> "🔫";
+            case KNIFE -> "🗡️";
+            case GLOVES -> "🧤";
+            case PATCH -> "🔰";
+            default -> "▪️";
         };
     }
 
+    private void handlePortfolio(Long chatId, Long userId) {
+        Set<String> ids = trackingService.getTrackedIds(userId);
+        if (ids.isEmpty()) {
+            sendMessage(chatId, "No tracked IDs. Use /track <steamId> to add one.");
+            return;
+        }
 
-    private void handlePortfolio(Long chatId) {
-        String report = inventoryService.getPortfolioReport();
-        sendMessage(chatId, report);
+        for (String id : ids) {
+            String report = validatePortfolioMessage(inventoryService.getPortfolioReport(steamService.steamIdToName(id)));
+            sendMessage(chatId, report);
+        }
     }
 
+    private String validatePortfolioMessage(List<ItemSnapshot> items) {
+        if (items.isEmpty()) return "📭 No data";
+        String steamName = items.getFirst().getOwner();
 
-//    public List<String> formatInventoryMessages(InventoryDto dto) {
-//        List<String> messages = new ArrayList<>();
-//
-//        Map<ItemType, List<ItemDto>> grouped = dto.getItems().stream()
-//                .collect(Collectors.groupingBy(
-//                        item -> ItemType.fromType(item.getType(), item.getDisplayName())
-//                ));
-//
-//        Map<ItemType, BigDecimal> groupSums = grouped.entrySet().stream()
-//                .collect(Collectors.toMap(
-//                        Map.Entry::getKey,
-//                        e -> e.getValue().stream()
-//                                .map(ItemDto::getTotalValue)
-//                                .reduce(BigDecimal.ZERO, BigDecimal::add)
-//                ));
-//
-//        // --- Сообщение 1: Сводка ---
-//        StringBuilder summary = new StringBuilder();
-//        summary.append("*🤖 [SteamBot]*\n");
-//        summary.append("*👤 Profile: *").append(dto.getSteamName()).append("\n");
-//        summary.append("*💰 Summary: *").append(String.format("%,.2f", dto.getTotalValue()))
-//                .append(" ₽ · ").append(dto.getTotalItems()).append(" items\n\n");
-//
-//        summary.append("💰* Balance Total: *").append(String.format("%,.2f ₽", dto.getTotalValue())).append("\n");
-//        summary.append("📦* items Total: *").append(dto.getTotalItems()).append(" pcs\n\n");
-//
-//        summary.append("📊* Inventory Profile:*\n");
-//
-//        groupSums.entrySet().stream()
-//                .sorted(Map.Entry.<ItemType, BigDecimal>comparingByValue().reversed())
-//                .forEach(e -> {
-//                    double percent = e.getValue().doubleValue() / dto.getTotalValue().doubleValue() * 100;
-//                    summary.append(String.format("%s %-15s — %3d pec · %,.2f ₽ (%,.0f%%)\n",
-//                            getIcon(e.getKey()),
-//                            e.getKey().getDisplayName(),
-//                            grouped.get(e.getKey()).size(),
-//                            e.getValue(),
-//                            percent));
-//                });
-//
-//        messages.add(summary.toString());
-//
-//        // --- Сообщения 2..N: по одному на каждый тип ---
-//        grouped.entrySet().stream()
-//                .sorted(Map.Entry.comparingByValue(
-//                        Comparator.comparingDouble(list ->
-//                                -list.stream().mapToDouble(i -> i.getTotalValue().doubleValue()).sum())
-//                ))
-//                .forEach(entry -> {
-//                    ItemType type = entry.getKey();
-//                    List<ItemDto> items = entry.getValue().stream()
-//                            .sorted(Comparator.comparing(ItemDto::getTotalValue).reversed())
-//                            .toList();
-//                    BigDecimal groupSum = groupSums.get(type);
-//
-//                    StringBuilder msg = new StringBuilder();
-//                    msg.append(getIcon(type)).append(" ")
-//                            .append(type.getDisplayName())
-//                            .append(": ").append(String.format("%,.2f ₽", groupSum)).append("\n\n");
-//
-//                    items.forEach(item ->
-//                            msg.append(item.getDisplayName()).append("\n")
-//                                    .append("   Qty: ").append(item.getQuantity())
-//                                    .append(" | Price: ").append(String.format("%,.2f ₽", item.getPrice()))
-//                                    .append(" | Total: ").append(String.format("%,.2f ₽", item.getTotalValue()))
-//                                    .append("\n")
-//                    );
-//
-//                    messages.add(msg.toString());
-//                });
-//
-//        return messages;
-//    }
-//
-//    private String getIcon(ItemType type) {
-//        return switch (type) {
-//            case CASE      -> "📦";
-//            case CAPSULE   -> "\uD83D\uDC8A";
-//            case STICKER   -> "\uD83D\uDD16";
-//            case CHARM     -> "\uD83C\uDFAD";
-//            case SKIN      -> "\uD83C\uDFAD";
-//            case KNIFE     -> "🗡️";
-//            case GLOVES    -> "🧤";
-//            case PATCH     -> "🔰";
-//            default        -> "▪️";
-//        };
-//    }
+        BigDecimal totalNow = items.stream()
+                .map(i -> i.getPriceNow().multiply(BigDecimal.valueOf(i.getQuantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        BigDecimal totalInitial = items.stream()
+                .map(i -> i.getPriceInitial().multiply(BigDecimal.valueOf(i.getQuantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-//    public String formatInventory(InventoryDto dto) {
-//        StringBuilder sb = new StringBuilder();
-//        sb.append("*🤖 [SteamBot]*\n");
-//        sb.append("👤 Profile: *").append(dto.getSteamName()).append("*\n");
-//        sb.append("💰 Summary: *").append(String.format("%,.2f", dto.getTotalValue()))
-//                .append(" ₽* · ").append(dto.getTotalItems()).append(" items\n");
-//
-//        Map<ItemType, List<ItemDto>> grouped = dto.getItems().stream()
-//                .collect(Collectors.groupingBy(item -> ItemType.fromType(item.getType())));
-//
-//        grouped.entrySet().stream()
-//                .sorted(Map.Entry.comparingByValue(
-//                        Comparator.comparingDouble(list ->
-//                                -list.stream().mapToDouble(i -> i.getTotalValue().doubleValue()).sum())
-//                ))
-//                .forEach(entry -> {
-//                    ItemType type = entry.getKey();
-//                    List<ItemDto> items = entry.getValue().stream()
-//                            .sorted(Comparator.comparing(ItemDto::getTotalValue).reversed())
-//                            .toList();
-//
-//                    BigDecimal groupSum = items.stream()
-//                            .map(ItemDto::getTotalValue)
-//                            .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//                    sb.append("\n").append(getIcon(type))
-//                            .append(" ").append(type.getDisplayName().toUpperCase()).append("\n");
-//
-//                    items.stream().limit(MAX_ITEMS_PER_GROUP).forEach(item ->
-//                            sb.append("\uD83E\uDDF1 ").append(item.getDisplayName())
-//                                    .append(" — ").append(item.getQuantity()).append(" pcs")
-//                                    .append(" × ").append(String.format("%,.2f ₽", item.getPrice()))
-//                                    .append(" = ").append(String.format("%,.2f ₽", item.getTotalValue()))
-//                                    .append("\n")
-//                    );
-//
-//                    List<ItemDto> rest = items.stream().skip(MAX_ITEMS_PER_GROUP).toList();
-//                    if (!rest.isEmpty()) {
-//                        BigDecimal restSum = rest.stream()
-//                                .map(ItemDto::getTotalValue)
-//                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//                        sb.append("▸ + ещё ").append(rest.size())
-//                                .append(" · ").append(String.format("%,.2f ₽", restSum)).append("\n");
-//                    }
-//                });
-//
-//        return sb.toString();
-//    }
-//
-//
+        BigDecimal totalDiff = totalNow.subtract(totalInitial);
+        String totalSign = totalDiff.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
 
-//    public String formatInventoryGrouped(InventoryDto dto) {
-//        StringBuilder sb = new StringBuilder();
-//        sb.append("*🤖 [SteamBot]*\n");
-//        sb.append("👤 Profile: *").append(dto.getSteamName()).append("*\n");
-//        sb.append("💰 Summary: *").append(String.format("%,.2f", dto.getTotalValue()))
-//                .append(" ₽* · ").append(dto.getTotalItems()).append(" items\n");
-//
-//        Map<ItemType, List<ItemDto>> grouped = dto.getItems().stream()
-//                .collect(Collectors.groupingBy(item -> ItemType.fromType(item.getType())));
-//
-//        grouped.entrySet().stream()
-//                .sorted(Map.Entry.<ItemType, List<ItemDto>>comparingByValue(
-//                        Comparator.comparingDouble(list ->
-//                                -list.stream().mapToDouble(i -> i.getTotalValue().doubleValue()).sum())
-//                ))
-//                .forEach(entry -> {
-//                    ItemType type = entry.getKey();
-//                    List<ItemDto> items = entry.getValue();
-//
-//                    BigDecimal groupSum = items.stream()
-//                            .map(ItemDto::getTotalValue)
-//                            .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//                    sb.append("\n").append(getIcon(type.name()))
-//                            .append(" *").append(type.getDisplayName().toUpperCase())
-//                            .append("*  —  ").append(items.size())
-//                            .append(" pcs · ").append(String.format("%,.2f ₽", groupSum)).append("\n");
-//
-//                    List<ItemDto> sorted = items.stream()
-//                            .sorted(Comparator.comparing(ItemDto::getTotalValue).reversed())
-//                            .toList();
-//
-//                    for (int i = 0; i < sorted.size(); i++) {
-//                        ItemDto item = sorted.get(i);
-//                        boolean isLast = i == sorted.size() - 1;
-//                        sb.append(isLast ? "└ " : "├ ");
-//                        sb.append(String.format("%-22s x%-3d → %,.2f ₽\n",
-//                                item.getDisplayName(), item.getQuantity(), item.getTotalValue()));
-//                    }
-//                });
-//
-//        return sb.toString();
-//    }
-//
-//    private String getIcon(String typeName) {
-//        ItemType type = ItemType.fromType(typeName);
-//        return switch (type) {
-//            case CONTAINER -> "📦";
-//            case STICKER   -> "🎨";
-//            case CHARM     -> "🪬";
-//            case SKIN      -> "🔫";
-//            case KNIFE     -> "🗡";
-//            case GLOVES    -> "🧤";
-//            case PATCH     -> "🔰";
-//            default        -> "▪️";
-//        };
-//    }
+        StringBuilder sb = new StringBuilder();
+        sb.append("*🤖 [SteamBot]*\n");
+        sb.append("*📊 Portfolio Report*\n");
+        sb.append("*\uD83D\uDDFF Profile: *").append(steamName).append("\n\n");
+        sb.append(String.format("💰 Now:     *%,.2f ₽*\n", totalNow));
+        sb.append(String.format("📌 Initial: *%,.2f ₽*\n", totalInitial));
+        sb.append(String.format("\uD83D\uDC51 PnL:     *%s%,.2f ₽*\n\n", totalSign, totalDiff));
 
+        // Топ 3 gainers
+        sb.append("📈 *Top Gainers:*\n");
+        items.stream()
+                .sorted(Comparator.<ItemSnapshot, BigDecimal>comparing(i ->
+                        i.getPriceNow().subtract(i.getPriceInitial())
+                                .multiply(BigDecimal.valueOf(i.getQuantity()))).reversed())
+                .limit(3)
+                .forEach(i -> {
+                    BigDecimal pnl = i.getPriceNow()
+                            .subtract(i.getPriceInitial())
+                            .multiply(BigDecimal.valueOf(i.getQuantity()));
+                    String sign = pnl.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
+                    sb.append(String.format("*%s*  %s  (%s%,.2f ₽)\n",
+                            i.getDisplayName(), i.getDifference(), sign, pnl));
+                });
 
-//
-//    private void trackAction(Long chatId, String messageText, long userId) {
-//        String steamId = messageText.replace("/track", "").trim();
-//        if (steamId.isEmpty()) {
-//            sendMessage(chatId, "⚠️Please provide valid SteamID! Example: `76561198207609671`");
-//            return;
-//        }
-//
-//        log.info("Sending request to steamService with {}", steamId);
-//        steamPortfolioService.trackInventory(steamId, userId);
-//        sendMessageWithPhoto(chatId, "📦 Portfolio for user *" + steamService.getSteamNameBySteamId(steamId) + "* is now tracking", "img_count2.png");
-//    }
-//
-//    private void checkPortfolio(Long chatId, Long userId, String messageText) {
-//        String steamId = messageText.replace("/inventory", "").trim();
-//        List<UserPortfolioDto> userPortfolioList = steamPortfolioService.getUserPortfolio(userId);
-//
-//        int differenceCounter = 0;
-//        StringBuilder message = new StringBuilder();
-//
-//        Double pnlPersent = 0.0;
-//        Double invested = 0.0;
-//        Double value = 0.0;
-//        for (UserPortfolioDto dto : userPortfolioList) {
-//            if (dto.getDifference() >= 0) {
-//                differenceCounter++;
-//            } else differenceCounter--;
-//
-//            String header = "📦 Portfolio for user *" + dto.getSteamUsername() + "* \n";
-//
-//            // Приведение к BigDecimal для точности
-//            BigDecimal initialPrice = BigDecimal.valueOf(dto.getInitialPrice());
-//            invested = initialPrice.doubleValue();
-//            BigDecimal priceNow = BigDecimal.valueOf(dto.getPriceNow());
-//            value = priceNow.doubleValue();
-//            BigDecimal difference = priceNow.subtract(initialPrice).setScale(2, RoundingMode.HALF_UP);
-//
-//            // Процентное изменение
-//            BigDecimal percentage = BigDecimal.ZERO;
-//            if (initialPrice.compareTo(BigDecimal.ZERO) != 0) {
-//                percentage = difference.divide(initialPrice, 6, RoundingMode.HALF_UP)
-//                        .multiply(BigDecimal.valueOf(100))
-//                        .setScale(1, RoundingMode.HALF_UP);
-//            }
-//            pnlPersent = percentage.doubleValue();
-//
-//            String body = "Cost: " + initialPrice.setScale(2, RoundingMode.HALF_UP) + " руб. | " +
-//                    "Price now: " + priceNow.setScale(2, RoundingMode.HALF_UP) + " руб. \n" +
-//                    "Difference: " + (difference.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "") + difference + " руб. | " +
-//                    "%: " + (difference.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "") + percentage + "%\n\n";
-//
-//            message.append(header).append(body);
-//        }
-//
-////        sendMessageWithPhoto(chatId, String.valueOf(message), differenceCounter >= 0 ? "img_2.png" : "img_2_loss.png");
-////        private void sendPnlImage(Long chatId, double pnlAmount, double pnlPercent, double invested, double value)
-////        private void sendPnlImage (Long chatId, BigDecimal pnlAmount, BigDecimal pnlPercent, BigDecimal
-////        invested, BigDecimal value)
-////        sendPnlImage(chatId, steamId, pnlAmount, pnlPersent, invested, value);
-//        sendMessageWithPhoto(chatId, String.valueOf(message), getPnlImage(chatId, steamId,  value - invested, pnlPersent, invested, value));
-//    }
-//
-//    public void sendSteamItemPrice(SteamItem steamItem, Long chatId) {
-//        if (steamItem == null || steamItem.getItemPrice() == null) {
-//            sendMessage(chatId, "⚠️ *Price data not available for this item.* Try another item or check later.");
-//            return;
-//        }
-//
-//        String cleanedPrice = steamItem.getItemPrice().replace(" руб.", "");
-//        String messageText = String.format("*Item*: %s\n*Price*: %s руб.",
-//                steamItem.getItemName(), cleanedPrice);
-//        sendMessage(chatId, messageText);
-//    }
-//
-//    public void sendTotalInventoryPrice(InventoryValueDto valueDto, Long chatId) {
-//        if (valueDto.getTotalPriceStr() == null || valueDto.getTotalPriceStr().isEmpty()) {
-//            sendMessage(chatId, "⚠️ Total price data not available.");
-//            return;
-//        }
-//
-//        String header = "<b>💰 Total inventory price:</b> " + valueDto.getTotalPriceStr() + "\n\n"
-//                + "<b>📦 Inventory items:</b>\n\n";
-//
-//        // HTML безопасный текст
-//        String body = valueDto.getInventoryComposition()
-//                .replace("&", "&amp;")
-//                .replace("<", "&lt;")
-//                .replace(">", "&gt;");
-//
-//        String tail = "\n\n<b>💰 And other items with less than 50 RUB total value:</b> ";
-//
-//        SendMessage message = new SendMessage();
-//        message.setChatId(chatId);
-//        message.setText(header + body + tail);
-//        message.setParseMode("HTML");
-//
-//        sendMessage(message);
-//    }
+        // Топ 3 losers
+        sb.append("\n📉 *Top Losers:*\n");
+        items.stream()
+                .sorted(Comparator.comparing(i ->
+                        i.getPriceNow().subtract(i.getPriceInitial())
+                                .multiply(BigDecimal.valueOf(i.getQuantity()))))
+                .limit(3)
+                .forEach(i -> {
+                    BigDecimal pnl = i.getPriceNow()
+                            .subtract(i.getPriceInitial())
+                            .multiply(BigDecimal.valueOf(i.getQuantity()));
+                    String sign = pnl.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
+                    sb.append(String.format(": %s  %s  (%s%,.2f ₽)\n",
+                            i.getDisplayName(), i.getDifference(), sign, pnl));
+                });
+
+        // По типам
+        sb.append("\n📦 *By Type:*\n");
+        items.stream()
+                .collect(Collectors.groupingBy(ItemSnapshot::getType))
+                .entrySet().stream()
+                .sorted(Map.Entry.comparingByValue(
+                        Comparator.comparingDouble(list ->
+                                -list.stream()
+                                        .mapToDouble(i -> i.getPriceNow().doubleValue() * i.getQuantity())
+                                        .sum())
+                ))
+                .forEach(e -> {
+                    double sum = e.getValue().stream()
+                            .mapToDouble(i -> i.getPriceNow().doubleValue() * i.getQuantity())
+                            .sum();
+                    int totalPcs = e.getValue().stream()
+                            .mapToInt(ItemSnapshot::getQuantity)
+                            .sum();
+                    sb.append(String.format("*%-10s* %,.2f ₽  (%d pcs)\n",
+                            e.getKey(), sum, totalPcs));
+                });
+
+        return sb.toString();
+    }
 
     private void sendMessage(Long chatId, String text) {
         SendMessage message = new SendMessage();
@@ -545,22 +362,6 @@ public class TelegramService extends TelegramLongPollingBot {
 
         try {
             execute(message);
-            log.info("Sent message to Telegram chat {}: {}", chatId, text);
-        } catch (TelegramApiException e) {
-            log.error("Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
-        }
-    }
-
-    private void sendMessageWithPhoto(Long chatId, String text, InputFile image) {
-        SendPhoto msg = SendPhoto
-                .builder()
-                .chatId(chatId)
-                .photo(image)
-                .caption(text)
-                .parseMode("Markdown")
-                .build();
-        try {
-            execute(msg);
             log.info("Sent message to Telegram chat {}: {}", chatId, text);
         } catch (TelegramApiException e) {
             log.error("Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
@@ -582,60 +383,4 @@ public class TelegramService extends TelegramLongPollingBot {
             log.error("Failed to send message to Telegram chat {}: {}", chatId, e.getMessage());
         }
     }
-
-    private void sendMessage(SendMessage message) {
-        try {
-            execute(message);
-            log.info("Sent message to Telegram chat");
-        } catch (TelegramApiException e) {
-            log.error("Failed to send message to Telegram chat");
-        }
-    }
-
-//    private void sendPnlImage(Long chatId, String steamId, Double pnlAmount, Double pnlPercent, Double invested, Double value) {
-//        try {
-//            // Генерируем изображение
-//            byte[] imageBytes = pnlGenerator.generatePnlImage(steamId, pnlAmount, pnlPercent, invested, value);
-//
-//            // Отправляем как InputFile из байтов
-//            InputFile inputFile = new InputFile();
-//            inputFile.setMedia(new ByteArrayInputStream(imageBytes), "pnl.png");
-//
-//            SendPhoto sendPhoto = SendPhoto.builder()
-//                    .chatId(chatId.toString())
-//                    .photo(inputFile)
-//                    .caption("Твой PNL! 💰 Обезьянка в деле.")
-//                    .build();
-//
-//            execute(sendPhoto);
-//        } catch (IOException | TelegramApiException e) {
-//            sendMessage(chatId, "Ошибка генерации изображения: " + e.getMessage());
-//            e.printStackTrace();  // Для логов
-//        }
-//    }
-//
-//    private InputFile getPnlImage(Long chatId, String steamId, Double pnlAmount, Double pnlPercent, Double invested, Double value) {
-//        try {
-//            // Генерируем изображение
-//            byte[] imageBytes = pnlGenerator.generatePnlImage(steamId, pnlAmount, pnlPercent, invested, value);
-//
-//            // Отправляем как InputFile из байтов
-//            InputFile inputFile = new InputFile();
-//            inputFile.setMedia(new ByteArrayInputStream(imageBytes), "pnl.png");
-//            return inputFile;
-//
-////            SendPhoto sendPhoto = SendPhoto.builder()
-////                    .chatId(chatId.toString())
-////                    .photo(inputFile)
-////                    .caption("Твой PNL! 💰 Обезьянка в деле.")
-////                    .build();
-////
-////            execute(sendPhoto);
-////        } catch (IOException | TelegramApiException e) {
-////            sendMessage(chatId, "Ошибка генерации изображения: " + e.getMessage());
-////            e.printStackTrace();  // Для логов
-//        } catch (IOException e) {
-//            throw new RuntimeException(e);
-//        }
-//    }
 }

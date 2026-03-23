@@ -25,7 +25,7 @@ public class PriceService {
     private final ObjectMapper objectMapper;
 
     private static final String PRICE_URL =
-        "https://steamcommunity.com/market/priceoverview/";
+            "https://steamcommunity.com/market/priceoverview/";
 
     private static final int DELAY_MS = 3000; // 3 секунды между запросами
 

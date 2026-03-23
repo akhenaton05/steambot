@@ -44,7 +44,7 @@ public class SteamController {
     @GetMapping("/portfolio")
     public void getPortfolio() {
         try {
-            itemsService.takeItemsSnapshot();
+            steamService.takeInventoriesSnapshot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

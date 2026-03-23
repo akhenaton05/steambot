@@ -8,6 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+import ru.steam.config.ProxyConfig;
 import ru.steam.service.TelegramService;
 
 import java.net.Authenticator;
@@ -18,18 +19,20 @@ import java.net.PasswordAuthentication;
 @SpringBootApplication
 public class SteamApplication {
     public static void main(String[] args) {
-        System.setProperty("java.net.socks.username", "user46073");
-        System.setProperty("java.net.socks.password", "uhomz8");
+        ApplicationContext context = SpringApplication.run(SteamApplication.class, args);
+
+        ProxyConfig proxyConfig = context.getBean(ProxyConfig.class);
+
+        System.setProperty("java.net.socks.username", proxyConfig.getUsername());
+        System.setProperty("java.net.socks.password", proxyConfig.getPassword());
 
         // Authenticator for SOCKS5
         Authenticator.setDefault(new Authenticator() {
             @Override
             protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication("user46073", "uhomz8".toCharArray());
+                return new PasswordAuthentication(proxyConfig.getUsername(), proxyConfig.getPassword().toCharArray());
             }
         });
-
-        ApplicationContext context = SpringApplication.run(SteamApplication.class, args);
         TelegramService telegramService = context.getBean(TelegramService.class);
 
         try {

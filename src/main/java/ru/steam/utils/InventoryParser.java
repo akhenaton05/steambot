@@ -39,8 +39,12 @@ public class InventoryParser {
                 continue;
             }
 
-            // Skipping non tradable\marketable items
-            if (desc.getTradable() != 1 || desc.getMarketable() != 1) {
+//            // Skipping non tradable\marketable items
+//            if (desc.getTradable() != 1 /*|| desc.getMarketable() != 1*/) {
+//                continue;
+//            }
+
+            if (desc.getMarketable() != 1) {
                 continue;
             }
 

@@ -9,8 +9,8 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.net.URIBuilder;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.RequestEntity;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 import ru.steam.config.SteamConfig;
@@ -19,6 +19,7 @@ import ru.steam.entity.Description;
 import ru.steam.entity.Inventory;
 import ru.steam.entity.InventoryResponse;
 import ru.steam.entity.dto.InventoryDto;
+import ru.steam.entity.event.InventoryFetchedEvent;
 import ru.steam.mapper.InventoryMapper;
 import ru.steam.utils.InventoryParser;
 
@@ -27,22 +28,32 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 @Slf4j
 @Service
 @AllArgsConstructor
 public class SteamService {
 
+    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final CloseableHttpClient httpClient;
     private final InventoryParser inventoryParser;
     private final PriceService priceService;
     private final SteamConfig steamConfig;
     private final InventoryMapper inventoryMapper;
+    private final TrackingService trackingService;
 
-    private static final String INVENTORY_URL =
-            "https://steamcommunity.com/inventory/{steamId}/730/2";
     private static final String USERNAME_URL = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/";
+
+    @Scheduled(cron = "0 0 07,19 * * *")
+    public void takeInventoriesSnapshot() throws InterruptedException {
+        Set<String> ids = trackingService.getAllSteamIds();
+        for (String id : ids) {
+            log.info("[SteamService] Taking inventory snapshot for {}.", id);
+            getInventory(id);
+        }
+    }
 
     private InventoryResponse fetchPage(String steamId, String lastAssetId) {
         try {
@@ -73,6 +84,7 @@ public class SteamService {
                 }
 
                 String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
+                log.info("Got response: {}", body);
                 return objectMapper.readValue(body, InventoryResponse.class);
             }
         } catch (Exception e) {
@@ -118,6 +130,8 @@ public class SteamService {
 
         InventoryDto dto = inventoryMapper.toDto(inventory);
         dto.setSteamName(steamIdToName(steamId));
+
+        eventPublisher.publishEvent(new InventoryFetchedEvent(this, dto));
 
         return dto;
     }

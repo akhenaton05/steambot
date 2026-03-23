@@ -2,13 +2,19 @@ package ru.steam.service;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import ru.steam.entity.ItemStatus;
 import ru.steam.entity.db.ItemSnapshot;
+import ru.steam.entity.db.PnlRecord;
 import ru.steam.entity.dto.InventoryDto;
 import ru.steam.entity.dto.ItemDto;
+import ru.steam.entity.event.InventoryFetchedEvent;
 import ru.steam.mapper.ItemSnapshotMapper;
+import ru.steam.mapper.SnapshotToRecordMapper;
 import ru.steam.repository.ItemsRepository;
+import ru.steam.repository.PnlRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -23,40 +29,97 @@ import java.util.stream.Collectors;
 public class InventoryService {
 
     private final ItemsRepository itemsRepository;
-    private final SteamService steamService;
+    private final PnlRepository pnlRepository;
     private final ItemSnapshotMapper itemSnapshotMapper;
 
-    private static final String STEAM_ID = "76561198158734100";
+    @Async
+    @EventListener
+    public void saveInventoryEvent(InventoryFetchedEvent event) {
+        saveInventory(event.getInventory());
+    }
 
-    @Scheduled(cron = "0 0 10,22 * * *")
-    public void takeItemsSnapshot() throws InterruptedException {
-        InventoryDto inventory = steamService.getInventory(STEAM_ID);
+    public void saveInventory(InventoryDto inventory) {
         String owner = inventory.getSteamName();
 
-        // Текущие имена предметов в инвентаре
-        Set<String> currentItemNames = inventory.getItems().stream()
-                .map(ItemDto::getDisplayName)
-                .collect(Collectors.toSet());
+        Map<String, Integer> currentSnapshot = inventory.getItems().stream()
+                .collect(Collectors.toMap(
+                        ItemDto::getDisplayName,
+                        ItemDto::getQuantity
+                ));
 
-        // Удаляем то чего больше нет в инвентаре
         List<ItemSnapshot> allExisting = itemsRepository.findAllByOwner(owner);
-        List<ItemSnapshot> toDelete = allExisting.stream()
-                .filter(s -> !currentItemNames.contains(s.getDisplayName()))
-                .toList();
-        itemsRepository.deleteAll(toDelete);
 
-        // Upsert — обновляем существующие или создаём новые
+        //Deleting SOLD items and moving them to pnl_record
+        List<ItemSnapshot> soldItems = allExisting.stream()
+                .filter(s -> ItemStatus.SOLD.name().equalsIgnoreCase(s.getStatus()))
+                .toList();
+
+        if (!soldItems.isEmpty()) {
+            validateSoldItems(soldItems);
+            itemsRepository.deleteAll(soldItems);
+        }
+
+        //Excluding SOLD items
+        List<ItemSnapshot> prevSnapshot = allExisting.stream()
+                .filter(s -> !ItemStatus.SOLD.name().equalsIgnoreCase(s.getStatus()))
+                .toList();
+
+        //Item disappeared → ON_SALE status
+        List<ItemSnapshot> onSale = prevSnapshot.stream()
+                .filter(s -> !currentSnapshot.containsKey(s.getDisplayName()))
+                .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
+                .toList();
+
+        onSale.forEach(s -> s.setStatus(ItemStatus.ON_SALE.name()));
+        itemsRepository.saveAll(onSale);
+
+        //Quantity checking → dividing string
+        List<ItemSnapshot> partiallyChanged = prevSnapshot.stream()
+                .filter(s -> currentSnapshot.containsKey(s.getDisplayName()))
+                .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
+                .filter(s -> s.getQuantity() > currentSnapshot.get(s.getDisplayName()))
+                .toList();
+
+        List<ItemSnapshot> onSaleSnapshots = new ArrayList<>();
+
+        partiallyChanged.forEach(s -> {
+            int oldQty = s.getQuantity();
+            int newQty = currentSnapshot.get(s.getDisplayName());
+            int soldQty = oldQty - newQty;
+
+            s.setQuantity(newQty);
+
+            onSaleSnapshots.add(ItemSnapshot.builder()
+                    .displayName(s.getDisplayName())
+                    .owner(s.getOwner())
+                    .quantity(soldQty)
+                    .status(ItemStatus.ON_SALE.name())
+                    .priceInitial(s.getPriceInitial())
+                    .priceNow(s.getPriceNow())
+                    .purchaseDate(s.getPurchaseDate())
+                    .holdTime(s.getHoldTime())
+                    .type(s.getType())
+                    .difference(s.getDifference())
+                    .date(LocalDate.now())
+                    .build());
+        });
+
+        itemsRepository.saveAll(partiallyChanged);
+        itemsRepository.saveAll(onSaleSnapshots);
+
+        //Upsert new items
+        Map<String, ItemSnapshot> prevSnapshotMap = prevSnapshot.stream()
+                .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
+                .collect(Collectors.toMap(ItemSnapshot::getDisplayName, s -> s));
+
         List<ItemSnapshot> toSave = new ArrayList<>();
 
         for (ItemDto item : inventory.getItems()) {
-            Optional<ItemSnapshot> existing = itemsRepository
-                    .findFirstByOwnerAndDisplayNameOrderByDateAsc(owner, item.getDisplayName());
-
+            ItemSnapshot existing = prevSnapshotMap.get(item.getDisplayName());
             ItemSnapshot snapshot;
 
-            if (existing.isPresent()) {
-                // Обновляем существующую запись — меняем только цену, дату, разницу
-                snapshot = existing.get();
+            if (Objects.nonNull(existing)) {
+                snapshot = existing;
                 snapshot.setPriceNow(item.getPrice());
                 snapshot.setDate(LocalDate.now());
 
@@ -67,10 +130,14 @@ public class InventoryService {
 
                 String sign = diff.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
                 snapshot.setDifference(sign + diff + "%");
+                snapshot.setQuantity(item.getQuantity());
 
-                // holdTime = сегодня - дата покупки
                 long holdDays = ChronoUnit.DAYS.between(snapshot.getPurchaseDate(), LocalDate.now());
                 snapshot.setHoldTime((int) holdDays);
+
+                if (ItemStatus.ON_SALE.name().equalsIgnoreCase(snapshot.getStatus())) {
+                    snapshot.setStatus(ItemStatus.HOLD.name());
+                }
 
             } else {
                 snapshot = itemSnapshotMapper.toItemSnapshot(item);
@@ -82,96 +149,28 @@ public class InventoryService {
                 snapshot.setHoldTime(0);
                 snapshot.setDifference("0%");
                 snapshot.setDate(LocalDate.now());
+                snapshot.setStatus(ItemStatus.HOLD.name());
             }
 
             toSave.add(snapshot);
         }
 
         itemsRepository.saveAll(toSave);
-        log.info("[InventoryService] Snapshot updated: {} items added, {} items deleted", toSave.size(), toDelete.size());
+        log.info("[InventoryService] Snapshot updated: {} upserted, {} on sale, {} partial, {} sold",
+                toSave.size(), onSale.size(), onSaleSnapshots.size(), soldItems.size());
     }
 
-    public String getPortfolioReport() {
-        String steamName = steamService.steamIdToName(STEAM_ID);
-        List<ItemSnapshot> items = itemsRepository.findAllByOwner(steamName);
-        if (items.isEmpty()) return "📭 No data";
+    private void validateSoldItems(List<ItemSnapshot> soldItems) {
+        List<PnlRecord> sold = soldItems.stream()
+                .map(SnapshotToRecordMapper::toRecord)
+                .toList();
 
-        BigDecimal totalNow = items.stream()
-                .map(i -> i.getPriceNow().multiply(BigDecimal.valueOf(i.getQuantity())))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal totalInitial = items.stream()
-                .map(i -> i.getPriceInitial().multiply(BigDecimal.valueOf(i.getQuantity())))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        BigDecimal totalDiff = totalNow.subtract(totalInitial);
-        String totalSign = totalDiff.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("*🤖 [SteamBot]*\n");
-        sb.append("*📊 Portfolio Report*\n");
-        sb.append("*\uD83D\uDDFF Profile: *").append(steamName).append("\n\n");
-        sb.append(String.format("💰 Now:     *%,.2f ₽*\n", totalNow));
-        sb.append(String.format("📌 Initial: *%,.2f ₽*\n", totalInitial));
-        sb.append(String.format("\uD83D\uDC51 PnL:     *%s%,.2f ₽*\n\n", totalSign, totalDiff));
-
-        // Топ 3 gainers
-        sb.append("📈 *Top Gainers:*\n");
-        items.stream()
-                .sorted(Comparator.<ItemSnapshot, BigDecimal>comparing(i ->
-                        i.getPriceNow().subtract(i.getPriceInitial())
-                                .multiply(BigDecimal.valueOf(i.getQuantity()))).reversed())
-                .limit(3)
-                .forEach(i -> {
-                    BigDecimal pnl = i.getPriceNow()
-                            .subtract(i.getPriceInitial())
-                            .multiply(BigDecimal.valueOf(i.getQuantity()));
-                    String sign = pnl.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
-                    sb.append(String.format("*%s*  %s  (%s%,.2f ₽)\n",
-                            i.getDisplayName(), i.getDifference(), sign, pnl));
-                });
-
-        // Топ 3 losers
-        sb.append("\n📉 *Top Losers:*\n");
-        items.stream()
-                .sorted(Comparator.comparing(i ->
-                        i.getPriceNow().subtract(i.getPriceInitial())
-                                .multiply(BigDecimal.valueOf(i.getQuantity()))))
-                .limit(3)
-                .forEach(i -> {
-                    BigDecimal pnl = i.getPriceNow()
-                            .subtract(i.getPriceInitial())
-                            .multiply(BigDecimal.valueOf(i.getQuantity()));
-                    String sign = pnl.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
-                    sb.append(String.format(": %s  %s  (%s%,.2f ₽)\n",
-                            i.getDisplayName(), i.getDifference(), sign, pnl));
-                });
-
-        // По типам
-        sb.append("\n📦 *By Type:*\n");
-        items.stream()
-                .collect(Collectors.groupingBy(ItemSnapshot::getType))
-                .entrySet().stream()
-                .sorted(Map.Entry.comparingByValue(
-                        Comparator.comparingDouble(list ->
-                                -list.stream()
-                                        .mapToDouble(i -> i.getPriceNow().doubleValue() * i.getQuantity())
-                                        .sum())
-                ))
-                .forEach(e -> {
-                    double sum = e.getValue().stream()
-                            .mapToDouble(i -> i.getPriceNow().doubleValue() * i.getQuantity())
-                            .sum();
-                    int totalPcs = e.getValue().stream()
-                            .mapToInt(ItemSnapshot::getQuantity)
-                            .sum();
-                    sb.append(String.format("*%-10s* %,.2f ₽  (%d pcs)\n",
-                            e.getKey(), sum, totalPcs));
-                });
-
-        return sb.toString();
+        pnlRepository.saveAll(sold);
     }
 
+    public List<ItemSnapshot> getPortfolioReport(String steamId) {
+        return itemsRepository.findAllByOwner(steamId);
+    }
 
     private String resolveType(String type, String displayName) {
         if (type == null) return "Unknown";

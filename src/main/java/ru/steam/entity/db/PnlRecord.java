@@ -5,18 +5,16 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import ru.steam.entity.ItemStatus;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 
 @Data
 @Entity
+@Table(name = "pnl")
 @Builder
-@Table(name = "items")
 @AllArgsConstructor
 @NoArgsConstructor
-public class ItemSnapshot {
+public class PnlRecord {
     @Id
     @GeneratedValue(strategy = GenerationType.AUTO)
     private Long id;
@@ -28,18 +26,14 @@ public class ItemSnapshot {
     private String type;
     @Column(name = "initial_price")
     private BigDecimal priceInitial;
+    @Column(name = "sell_price")
+    private BigDecimal sellPrice;
     @Column(name = "amount")
     private int quantity;
-    @Column(name = "today_price")
-    private BigDecimal priceNow;
+    @Column(name = "realized_pnl")
+    private BigDecimal realizedProfit;
     @Column
     private String difference;
-    @Column(name = "update_date")
-    private LocalDate date;
     @Column(name = "hold_time")
     private Integer holdTime;
-    @Column(name = "purchase_date")
-    private LocalDate purchaseDate;
-    @Column(name = "status")
-    private String status;
 }

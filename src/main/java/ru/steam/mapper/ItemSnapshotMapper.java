@@ -16,6 +16,6 @@ public interface ItemSnapshotMapper {
     @Mapping(target = "purchaseDate", ignore = true)
     @Mapping(target = "holdTime", ignore = true)
     @Mapping(source = "price", target = "priceNow")
-    @Mapping(source = "quantity", target = "quantity") // ← явно укажи
+    @Mapping(source = "quantity", target = "quantity")
     ItemSnapshot toItemSnapshot(ItemDto dto);
 }
