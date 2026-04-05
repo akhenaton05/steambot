@@ -98,8 +98,8 @@ public class ProxyConfig {
     @Bean
     public DefaultBotOptions telegramBotOptions() {
         DefaultBotOptions options = new DefaultBotOptions();
-        options.setProxyHost("156.236.107.125");
-        options.setProxyPort(16356); // ← SOCKS5 порт
+        options.setProxyHost("141.11.162.187");
+        options.setProxyPort(47383); // ← SOCKS5 порт
         options.setProxyType(DefaultBotOptions.ProxyType.SOCKS5);
         return options;
     }
