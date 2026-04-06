@@ -61,7 +61,7 @@ public class InventoryParser {
             hashToDesc.putIfAbsent(hashName, desc);
         }
 
-        log.info("[InventoryParser] steamId={}: {} unique tradable items", steamId, countMap.size());
+//        log.info("[InventoryParser] steamId={}: {} unique tradable items", steamId, countMap.size());
 
         // ШАГ 3: собираем List<CsItem> из накопленных данных
         List<Item> items = countMap.entrySet().stream()

@@ -293,9 +293,9 @@ public class TelegramService extends TelegramLongPollingBot {
         sb.append("*🤖 [SteamBot]*\n");
         sb.append("*📊 Portfolio Report*\n");
         sb.append("*\uD83D\uDDFF Profile: *").append(steamName).append("\n\n");
-        sb.append(String.format("💰 Now:     *%,.2f ₽*\n", totalNow));
-        sb.append(String.format("📌 Initial: *%,.2f ₽*\n", totalInitial));
-        sb.append(String.format("\uD83D\uDC51 PnL:     *%s%,.2f ₽*\n\n", totalSign, totalDiff));
+        sb.append(String.format("💰 Now:     *%,.1f ₽*\n", totalNow));
+        sb.append(String.format("📌 Initial: *%,.1f ₽*\n", totalInitial));
+        sb.append(String.format("\uD83D\uDC51 PnL:     *%s%,.1f ₽*\n\n", totalSign, totalDiff));
 
         // Топ 3 gainers
         sb.append("📈 *Top Gainers:*\n");
@@ -309,7 +309,7 @@ public class TelegramService extends TelegramLongPollingBot {
                             .subtract(i.getPriceInitial())
                             .multiply(BigDecimal.valueOf(i.getQuantity()));
                     String sign = pnl.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
-                    sb.append(String.format("*%s*  %s  (%s%,.2f ₽)\n",
+                    sb.append(String.format("*%s*  %s  (%s%,.1f ₽)\n",
                             i.getDisplayName(), i.getDifference(), sign, pnl));
                 });
 
@@ -325,7 +325,7 @@ public class TelegramService extends TelegramLongPollingBot {
                             .subtract(i.getPriceInitial())
                             .multiply(BigDecimal.valueOf(i.getQuantity()));
                     String sign = pnl.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
-                    sb.append(String.format(": %s  %s  (%s%,.2f ₽)\n",
+                    sb.append(String.format("*%s*  %s  (%s%,.1f ₽)\n",
                             i.getDisplayName(), i.getDifference(), sign, pnl));
                 });
 
@@ -347,7 +347,7 @@ public class TelegramService extends TelegramLongPollingBot {
                     int totalPcs = e.getValue().stream()
                             .mapToInt(ItemSnapshot::getQuantity)
                             .sum();
-                    sb.append(String.format("*%-10s* %,.2f ₽  (%d pcs)\n",
+                    sb.append(String.format("*%-10s* %,.1f ₽  (%d pcs)\n",
                             e.getKey(), sum, totalPcs));
                 });
 

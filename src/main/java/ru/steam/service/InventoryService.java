@@ -125,8 +125,9 @@ public class InventoryService {
 
                 BigDecimal diff = item.getPrice()
                         .subtract(snapshot.getPriceInitial())
-                        .divide(snapshot.getPriceInitial(), 2, RoundingMode.HALF_UP)
-                        .multiply(BigDecimal.valueOf(100));
+                        .divide(snapshot.getPriceInitial(), 4, RoundingMode.HALF_UP)
+                        .multiply(BigDecimal.valueOf(100))
+                        .setScale(0, RoundingMode.HALF_UP);
 
                 String sign = diff.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
                 snapshot.setDifference(sign + diff + "%");
