@@ -28,7 +28,7 @@ public class PriceService {
 
     private static final String PRICE_URL = "https://steamcommunity.com/market/priceoverview/";
 
-    private static final int DELAY_MS = 6000; //Delay before next query
+    private static final int DELAY_MS = 3000; //Delay before next query
 
     public Optional<BigDecimal> fetchPrice(String marketHashName) throws InterruptedException {
         Thread.sleep(DELAY_MS);

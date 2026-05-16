@@ -19,16 +19,15 @@ public class InventoryParser {
         Map<String, Description> descriptions = new HashMap<>();
         for (Description desc : response.getDescriptions()) {
             if (desc.getMarketable() == 1) {  // Filtering marketable items only
-                String key = desc.getClassId() + "_" + desc.getInstanceId();
-                descriptions.put(key, desc);
+                //String key = desc.getClassId() + "_" + desc.getInstanceId();
+                descriptions.putIfAbsent(desc.getClassId(), desc);
             }
         }
 
         //Filtering + counting quantity - by Assets
         Map<String, Integer> itemsCount = new HashMap<>();
         for (Asset asset : response.getAssets()) {
-            String key = asset.getClassId() + "_" + asset.getInstanceId();
-            itemsCount.merge(key, 1, Integer::sum);
+            itemsCount.merge(asset.getClassId(), 1, Integer::sum);
         }
 
         List<Item> items = descriptions.values().stream()
@@ -37,7 +36,7 @@ public class InventoryParser {
                             .marketHashName(description.getMarketHashName())
                             .displayName(description.getName())
                             .type(description.getType())
-                            .quantity(itemsCount.get(description.getClassId() + "_" + description.getInstanceId()))
+                            .quantity(itemsCount.getOrDefault(description.getClassId(), 0))
                             .build();
                 })
                 .toList();
