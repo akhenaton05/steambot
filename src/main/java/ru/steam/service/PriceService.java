@@ -1,6 +1,7 @@
 package ru.steam.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
@@ -19,22 +20,18 @@ import java.util.Optional;
 
 @Slf4j
 @Service
+@AllArgsConstructor
 public class PriceService {
 
     private final CloseableHttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    private static final String PRICE_URL =
-            "https://steamcommunity.com/market/priceoverview/";
+    private static final String PRICE_URL = "https://steamcommunity.com/market/priceoverview/";
 
-    private static final int DELAY_MS = 3000; // 3 секунды между запросами
+    private static final int DELAY_MS = 6000; //Delay before next query
 
-    public PriceService(CloseableHttpClient httpClient, ObjectMapper objectMapper) {
-        this.httpClient = httpClient;
-        this.objectMapper = objectMapper;
-    }
-
-    public Optional<BigDecimal> fetchPrice(String marketHashName) {
+    public Optional<BigDecimal> fetchPrice(String marketHashName) throws InterruptedException {
+        Thread.sleep(DELAY_MS);
         try {
             URI uri = new URIBuilder(PRICE_URL)
                     .addParameter("appid", "730")
@@ -54,7 +51,7 @@ public class PriceService {
                 PriceResponse price = objectMapper.readValue(body, PriceResponse.class);
 
                 if (!price.isSuccess() || price.getLowestPrice() == null) {
-                    return Optional.empty(); // предмет не продаётся
+                    return Optional.empty();
                 }
 
                 return Optional.of(parsePrice(price.getLowestPrice()));
@@ -67,23 +64,20 @@ public class PriceService {
     }
 
     private BigDecimal parsePrice(String priceStr) {
-        // Приходит: "25,37 руб."  или  "1 234,56 руб."
-        // Нужно:     25.37              1234.56
-
+        //API response: "25,37 руб.", "1 234,56 руб."
+        //Parsed: 25.37, 1234.56
         String cleaned = priceStr
-                .replace(" руб.", "")   // убираем валюту
-                .replace("\u00a0", "")  // убираем неразрывный пробел (часто в числах)
-                .replace(" ", "")       // убираем обычный пробел (разделитель тысяч)
-                .replace(",", ".");     // запятая → точка
+                .replace(" руб.", "")
+                .replace("\u00a0", "")
+                .replace(" ", "")
+                .replace(",", ".");
 
-        // cleaned теперь "25.37"
         return new BigDecimal(cleaned);
     }
 
-    // Главный метод — обогащает весь инвентарь ценами
-    public void enrichWithPrices(Inventory inventory) throws InterruptedException {
+    public void setItemPrice(Inventory inventory) throws InterruptedException {
         BigDecimal totalValue = BigDecimal.ZERO;
-        int processed = 0;
+        int count = 0;
 
         for (Item item : inventory.getItems()) {
             Optional<BigDecimal> price = fetchPrice(item.getMarketHashName());
@@ -99,16 +93,12 @@ public class PriceService {
                 totalValue = totalValue.add(itemTotal);
             }
 
-            processed++;
+            count++;
+
             log.info("[PriceService] Fetched {}/{}: {} → {}",
-                    processed, inventory.getItems().size(),
+                    count, inventory.getItems().size(),
                     item.getMarketHashName(),
                     price.map(BigDecimal::toString).orElse("no price"));
-
-            // пауза ПОСЛЕ каждого запроса, кроме последнего
-            if (processed < inventory.getItems().size()) {
-                Thread.sleep(DELAY_MS);
-            }
         }
 
         inventory.setTotalValue(totalValue);

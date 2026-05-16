@@ -1,11 +1,8 @@
 package ru.steam.utils;
 
-import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import ru.steam.entity.*;
-import ru.steam.entity.dto.InventoryDto;
-import ru.steam.mapper.InventoryMapper;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -14,68 +11,36 @@ import java.util.stream.Collectors;
 @Component
 public class InventoryParser {
 
+    /* classId - item description
+       assetId - unique item in inventory(for counting)
+       instanceId - 0 - default, 1 - StatTrack, etc.
+     */
     public Inventory parse(InventoryResponse response, String steamId) {
-
-        // ШАГ 1: словарь описаний по ключу "classId_instanceId"
-        // зачем: чтобы за O(1) находить описание по данным из asset
-        Map<String, Description> descMap = new HashMap<>();
+        Map<String, Description> descriptions = new HashMap<>();
         for (Description desc : response.getDescriptions()) {
-            String key = desc.getClassId() + "_" + desc.getInstanceId();
-            descMap.put(key, desc);
+            if (desc.getMarketable() == 1) {  // Filtering marketable items only
+                String key = desc.getClassId() + "_" + desc.getInstanceId();
+                descriptions.put(key, desc);
+            }
         }
-        // пример: "7993037205_1363818008" → Description(marketHashName="Tec-9 | Tiger...")
 
-        // ШАГ 2: проходим по assets и считаем количество каждого предмета
-        // один asset = одна физическая копия предмета в инвентаре
-        Map<String, Integer> countMap = new LinkedHashMap<>(); // LinkedHashMap сохраняет порядок
-        Map<String, Description> hashToDesc = new HashMap<>();
-
+        //Filtering + counting quantity - by Assets
+        Map<String, Integer> itemsCount = new HashMap<>();
         for (Asset asset : response.getAssets()) {
             String key = asset.getClassId() + "_" + asset.getInstanceId();
-            Description desc = descMap.get(key);
-
-            if (Objects.isNull(desc)) {
-                log.warn("No description for asset {}", asset.getAssetId());
-                continue;
-            }
-
-//            // Skipping non tradable\marketable items
-//            if (desc.getTradable() != 1 /*|| desc.getMarketable() != 1*/) {
-//                continue;
-//            }
-
-            if (desc.getMarketable() != 1) {
-                continue;
-            }
-
-            String hashName = desc.getMarketHashName();
-
-            // merge: если ключ уже есть — применяет функцию (old, new) -> old + new
-            //        если ключа нет — кладёт значение 1
-            // эквивалентно: countMap.put(key, countMap.getOrDefault(key, 0) + 1)
-            countMap.merge(hashName, 1, Integer::sum);
-
-            // putIfAbsent: кладёт только если ключа ещё нет
-            // нам нужно сохранить Description для доступа к name/type
-            // но достаточно одной копии — все одинаковые предметы имеют одно описание
-            hashToDesc.putIfAbsent(hashName, desc);
+            itemsCount.merge(key, 1, Integer::sum);
         }
 
-//        log.info("[InventoryParser] steamId={}: {} unique tradable items", steamId, countMap.size());
-
-        // ШАГ 3: собираем List<CsItem> из накопленных данных
-        List<Item> items = countMap.entrySet().stream()
-                .map(entry -> {
-                    String hashName = entry.getKey();
-                    Description desc = hashToDesc.get(hashName);
+        List<Item> items = descriptions.values().stream()
+                .map(description -> {
                     return Item.builder()
-                            .marketHashName(hashName)
-                            .displayName(desc.getName())
-                            .type(desc.getType())
-                            .quantity(entry.getValue())
+                            .marketHashName(description.getMarketHashName())
+                            .displayName(description.getName())
+                            .type(description.getType())
+                            .quantity(itemsCount.get(description.getClassId() + "_" + description.getInstanceId()))
                             .build();
                 })
-                .collect(Collectors.toList());
+                .toList();
 
         return Inventory.builder()
                 .steamId(steamId)

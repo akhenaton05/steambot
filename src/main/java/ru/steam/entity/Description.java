@@ -20,8 +20,8 @@ public class Description {
 
     @JsonProperty("market_hash_name")
     private String marketHashName;  // "Tec-9 | Tiger Stencil (Field-Tested)"
-    private String name;            // "Tec-9 | Tiger Stencil" (без wear)
+    private String name;            // "Tec-9 | Tiger Stencil"
     private String type;            // "Industrial Grade Pistol"
-    private int tradable;           // 1 = можно торговать
-    private int marketable;         // 1 = можно продать на маркете
+    private int tradable;           // 1 = tradable
+    private int marketable;         // 1 = marketable
 }

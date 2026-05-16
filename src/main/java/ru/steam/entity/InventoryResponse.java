@@ -18,8 +18,8 @@ public class InventoryResponse {
     private List<Asset> assets;
     private List<Description> descriptions;
     
-    @JsonProperty("more_items")          // ← JSON ключ с underscore
-    private int moreItems;               // ← Java поле в camelCase
+    @JsonProperty("more_items")
+    private int moreItems;
     
     @JsonProperty("last_assetid")
     private String lastAssetid;

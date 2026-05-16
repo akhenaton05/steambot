@@ -60,7 +60,7 @@ public class SteamService {
             URIBuilder builder = new URIBuilder(
                     "https://steamcommunity.com/inventory/" + steamId + "/730/2")
                     .addParameter("l", "english")
-                    .addParameter("count", "2000"); // максимум за запрос
+                    .addParameter("count", "2000");
 
             // добавляем start_assetid только если это не первая страница
             if (lastAssetId != null) {
@@ -84,7 +84,6 @@ public class SteamService {
                 }
 
                 String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-                log.info("Got response: {}", body);
                 return objectMapper.readValue(body, InventoryResponse.class);
             }
         } catch (Exception e) {
@@ -126,12 +125,13 @@ public class SteamService {
 
         Inventory inventory = inventoryParser.parse(fullResponse, steamId);
 
-        priceService.enrichWithPrices(inventory);
+        priceService.setItemPrice(inventory);
 
         InventoryDto dto = inventoryMapper.toDto(inventory);
         dto.setSteamName(steamIdToName(steamId));
 
-        eventPublisher.publishEvent(new InventoryFetchedEvent(this, dto));
+        //Publishing event for tracking
+        eventPublisher.publishEvent(new InventoryFetchedEvent(dto));
 
         return dto;
     }
