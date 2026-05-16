@@ -48,14 +48,13 @@ public class PriceService {
                 }
 
                 String body = EntityUtils.toString(resp.getEntity(), StandardCharsets.UTF_8);
-                log.info("[PriceService] Parse body response: {}", body);
                 PriceResponse price = objectMapper.readValue(body, PriceResponse.class);
 
-                if (!price.isSuccess() || price.getLowestPrice() == null) {
+                if (!price.isSuccess() || price.getMedianPrice() == null) {
                     return Optional.empty();
                 }
 
-                return Optional.of(parsePrice(price.getLowestPrice()));
+                return Optional.of(parsePrice(price.getMedianPrice()));
             }
 
         } catch (Exception e) {
