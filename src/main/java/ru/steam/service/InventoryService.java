@@ -49,7 +49,7 @@ public class InventoryService {
 
         List<ItemSnapshot> allExisting = itemsRepository.findAllByOwner(owner);
 
-        //Deleting SOLD items and moving them to pnl_record
+        // Deleting SOLD items and moving them to pnl_record
         List<ItemSnapshot> soldItems = allExisting.stream()
                 .filter(s -> ItemStatus.SOLD.name().equalsIgnoreCase(s.getStatus()))
                 .toList();
@@ -59,12 +59,12 @@ public class InventoryService {
             itemsRepository.deleteAll(soldItems);
         }
 
-        //Excluding SOLD items
+        // Excluding SOLD items
         List<ItemSnapshot> prevSnapshot = allExisting.stream()
                 .filter(s -> !ItemStatus.SOLD.name().equalsIgnoreCase(s.getStatus()))
                 .toList();
 
-        //Item disappeared → ON_SALE status
+        // Item disappeared → ON_SALE status
         List<ItemSnapshot> onSale = prevSnapshot.stream()
                 .filter(s -> !currentSnapshot.containsKey(s.getDisplayName()))
                 .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
@@ -73,7 +73,7 @@ public class InventoryService {
         onSale.forEach(s -> s.setStatus(ItemStatus.ON_SALE.name()));
         itemsRepository.saveAll(onSale);
 
-        //Quantity checking → dividing string
+        // Quantity decreased → partial sale, split into HOLD + ON_SALE
         List<ItemSnapshot> partiallyChanged = prevSnapshot.stream()
                 .filter(s -> currentSnapshot.containsKey(s.getDisplayName()))
                 .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
@@ -107,16 +107,22 @@ public class InventoryService {
         itemsRepository.saveAll(partiallyChanged);
         itemsRepository.saveAll(onSaleSnapshots);
 
+        // Duplicate protection HOLD+ON_SALE in map, HOLD holds priority
         Map<String, ItemSnapshot> prevSnapshotMap = prevSnapshot.stream()
                 .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus())
                         || ItemStatus.ON_SALE.name().equalsIgnoreCase(s.getStatus()))
-                .collect(Collectors.toMap(ItemSnapshot::getDisplayName, s -> s));
+                .collect(Collectors.toMap(
+                        ItemSnapshot::getDisplayName,
+                        s -> s,
+                        (a, b) -> ItemStatus.HOLD.name().equalsIgnoreCase(a.getStatus()) ? a : b
+                ));
 
         Set<String> partiallyChangedNames = partiallyChanged.stream()
                 .map(ItemSnapshot::getDisplayName)
                 .collect(Collectors.toSet());
 
         List<ItemSnapshot> toSave = new ArrayList<>();
+        List<ItemSnapshot> toDelete = new ArrayList<>();
 
         for (ItemDto item : inventory.getItems()) {
 
@@ -132,7 +138,7 @@ public class InventoryService {
                 snapshot.setPriceNow(item.getPrice());
                 snapshot.setDate(LocalDate.now());
 
-                //More items added -> changing average price
+                // More items added → recalculate average priceInitial
                 int oldQty = existing.getQuantity();
                 int newQty = item.getQuantity();
 
@@ -142,11 +148,10 @@ public class InventoryService {
                             .multiply(BigDecimal.valueOf(oldQty))
                             .add(item.getPrice().multiply(BigDecimal.valueOf(addedQty)))
                             .divide(BigDecimal.valueOf(newQty), 2, RoundingMode.HALF_UP);
-
                     snapshot.setPriceInitial(avgPrice);
                 }
 
-                //Calculating price diff between initial and current
+                // Price diff
                 BigDecimal diff = item.getPrice()
                         .subtract(snapshot.getPriceInitial())
                         .divide(snapshot.getPriceInitial(), 4, RoundingMode.HALF_UP)
@@ -162,6 +167,17 @@ public class InventoryService {
 
                 if (ItemStatus.ON_SALE.name().equalsIgnoreCase(snapshot.getStatus())) {
                     snapshot.setStatus(ItemStatus.HOLD.name());
+
+                    prevSnapshot.stream()
+                            .filter(s -> s.getDisplayName().equals(snapshot.getDisplayName()))
+                            .filter(s -> ItemStatus.ON_SALE.name().equalsIgnoreCase(s.getStatus()))
+                            .filter(s -> !s.getId().equals(snapshot.getId()))
+                            .findFirst()
+                            .ifPresent(duplicate -> {
+                                toDelete.add(duplicate);
+                                log.info("[InventoryService] Merging ON_SALE duplicate for '{}', deleting id={}",
+                                        snapshot.getDisplayName(), duplicate.getId());
+                            });
                 }
 
             } else {
@@ -180,10 +196,162 @@ public class InventoryService {
             toSave.add(snapshot);
         }
 
+        // Deleting ON_SALE duplicates
+        if (!toDelete.isEmpty()) {
+            itemsRepository.deleteAll(toDelete);
+        }
+
         itemsRepository.saveAll(toSave);
-        log.info("[InventoryService] Snapshot updated: {} upserted, {} on sale, {} partial, {} sold",
-                toSave.size(), onSale.size(), onSaleSnapshots.size(), soldItems.size());
+        log.info("[InventoryService] Snapshot updated: {} upserted, {} on sale, {} partial, {} sold, {} duplicates merged",
+                toSave.size(), onSale.size(), onSaleSnapshots.size(), soldItems.size(), toDelete.size());
     }
+
+//    public void saveInventory(InventoryDto inventory) {
+//        String owner = inventory.getSteamName();
+//
+//        Map<String, Integer> currentSnapshot = inventory.getItems().stream()
+//                .collect(Collectors.toMap(
+//                        ItemDto::getDisplayName,
+//                        ItemDto::getQuantity
+//                ));
+//
+//        List<ItemSnapshot> allExisting = itemsRepository.findAllByOwner(owner);
+//
+//        //Deleting SOLD items and moving them to pnl_record
+//        List<ItemSnapshot> soldItems = allExisting.stream()
+//                .filter(s -> ItemStatus.SOLD.name().equalsIgnoreCase(s.getStatus()))
+//                .toList();
+//
+//        if (!soldItems.isEmpty()) {
+//            validateSoldItems(soldItems);
+//            itemsRepository.deleteAll(soldItems);
+//        }
+//
+//        //Excluding SOLD items
+//        List<ItemSnapshot> prevSnapshot = allExisting.stream()
+//                .filter(s -> !ItemStatus.SOLD.name().equalsIgnoreCase(s.getStatus()))
+//                .toList();
+//
+//        //Item disappeared → ON_SALE status
+//        List<ItemSnapshot> onSale = prevSnapshot.stream()
+//                .filter(s -> !currentSnapshot.containsKey(s.getDisplayName()))
+//                .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
+//                .toList();
+//
+//        onSale.forEach(s -> s.setStatus(ItemStatus.ON_SALE.name()));
+//        itemsRepository.saveAll(onSale);
+//
+//        //Quantity checking → dividing string
+//        List<ItemSnapshot> partiallyChanged = prevSnapshot.stream()
+//                .filter(s -> currentSnapshot.containsKey(s.getDisplayName()))
+//                .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus()))
+//                .filter(s -> s.getQuantity() > currentSnapshot.get(s.getDisplayName()))
+//                .toList();
+//
+//        List<ItemSnapshot> onSaleSnapshots = new ArrayList<>();
+//
+//        partiallyChanged.forEach(s -> {
+//            int oldQty = s.getQuantity();
+//            int newQty = currentSnapshot.get(s.getDisplayName());
+//            int soldQty = oldQty - newQty;
+//
+//            s.setQuantity(newQty);
+//
+//            onSaleSnapshots.add(ItemSnapshot.builder()
+//                    .displayName(s.getDisplayName())
+//                    .owner(s.getOwner())
+//                    .quantity(soldQty)
+//                    .status(ItemStatus.ON_SALE.name())
+//                    .priceInitial(s.getPriceInitial())
+//                    .priceNow(s.getPriceNow())
+//                    .purchaseDate(s.getPurchaseDate())
+//                    .holdTime(s.getHoldTime())
+//                    .type(s.getType())
+//                    .difference(s.getDifference())
+//                    .date(LocalDate.now())
+//                    .build());
+//        });
+//
+//        itemsRepository.saveAll(partiallyChanged);
+//        itemsRepository.saveAll(onSaleSnapshots);
+//
+//        Map<String, ItemSnapshot> prevSnapshotMap = prevSnapshot.stream()
+//                .filter(s -> ItemStatus.HOLD.name().equalsIgnoreCase(s.getStatus())
+//                        || ItemStatus.ON_SALE.name().equalsIgnoreCase(s.getStatus()))
+//                .collect(Collectors.toMap(ItemSnapshot::getDisplayName, s -> s));
+//
+//        Set<String> partiallyChangedNames = partiallyChanged.stream()
+//                .map(ItemSnapshot::getDisplayName)
+//                .collect(Collectors.toSet());
+//
+//        List<ItemSnapshot> toSave = new ArrayList<>();
+//
+//        for (ItemDto item : inventory.getItems()) {
+//
+//            if (partiallyChangedNames.contains(item.getDisplayName())) {
+//                continue;
+//            }
+//
+//            ItemSnapshot existing = prevSnapshotMap.get(item.getDisplayName());
+//            ItemSnapshot snapshot;
+//
+//            if (existing != null) {
+//                snapshot = existing;
+//                snapshot.setPriceNow(item.getPrice());
+//                snapshot.setDate(LocalDate.now());
+//
+//                //More items added -> changing average price
+//                int oldQty = existing.getQuantity();
+//                int newQty = item.getQuantity();
+//
+//                if (newQty > oldQty) {
+//                    int addedQty = newQty - oldQty;
+//                    BigDecimal avgPrice = existing.getPriceInitial()
+//                            .multiply(BigDecimal.valueOf(oldQty))
+//                            .add(item.getPrice().multiply(BigDecimal.valueOf(addedQty)))
+//                            .divide(BigDecimal.valueOf(newQty), 2, RoundingMode.HALF_UP);
+//
+//                    snapshot.setPriceInitial(avgPrice);
+//                }
+//
+//                //Calculating price diff between initial and current
+//                BigDecimal diff = item.getPrice()
+//                        .subtract(snapshot.getPriceInitial())
+//                        .divide(snapshot.getPriceInitial(), 4, RoundingMode.HALF_UP)
+//                        .multiply(BigDecimal.valueOf(100))
+//                        .setScale(0, RoundingMode.HALF_UP);
+//
+//                String sign = diff.compareTo(BigDecimal.ZERO) >= 0 ? "+" : "";
+//                snapshot.setDifference(sign + diff + "%");
+//                snapshot.setQuantity(item.getQuantity());
+//
+//                long holdDays = ChronoUnit.DAYS.between(snapshot.getPurchaseDate(), LocalDate.now());
+//                snapshot.setHoldTime((int) holdDays);
+//
+//                if (ItemStatus.ON_SALE.name().equalsIgnoreCase(snapshot.getStatus())) {
+//                    snapshot.setStatus(ItemStatus.HOLD.name());
+//                }
+//
+//            } else {
+//                snapshot = itemSnapshotMapper.toItemSnapshot(item);
+//                snapshot.setOwner(owner);
+//                snapshot.setType(resolveType(item.getType(), item.getDisplayName()));
+//                snapshot.setPriceInitial(item.getPrice());
+//                snapshot.setPriceNow(item.getPrice());
+//                snapshot.setPurchaseDate(LocalDate.now());
+//                snapshot.setHoldTime(0);
+//                snapshot.setDifference("0%");
+//                snapshot.setDate(LocalDate.now());
+//                snapshot.setStatus(ItemStatus.HOLD.name());
+//            }
+//
+//            toSave.add(snapshot);
+//        }
+//
+//        itemsRepository.saveAll(toSave);
+//        log.info("[InventoryService] Snapshot updated: {} upserted, {} on sale, {} partial, {} sold",
+//                toSave.size(), onSale.size(), onSaleSnapshots.size(), soldItems.size());
+//    }
 
 //    public void saveInventory(InventoryDto inventory) {
 //        String owner = inventory.getSteamName();
