@@ -51,7 +51,10 @@ public class PriceService {
                 PriceResponse price = objectMapper.readValue(body, PriceResponse.class);
 
                 if (!price.isSuccess() || price.getMedianPrice() == null) {
-                    return Optional.empty();
+                    if (price.getLowestPrice() != null) {
+                        price.setMedianPrice(price.getLowestPrice());
+                    }
+                    else return Optional.empty();
                 }
 
                 return Optional.of(parsePrice(price.getMedianPrice()));
